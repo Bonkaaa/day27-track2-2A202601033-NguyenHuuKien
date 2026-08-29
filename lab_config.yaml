@@ -1,0 +1,22 @@
+project_name: data-reliability-game-day
+
+slo:
+  revenue_freshness:
+    target: 0.995
+    threshold_minutes: 30
+  critical_contract_pass:
+    target: 0.999
+  rag_index_freshness:
+    target: 0.99
+    threshold_minutes: 60
+
+anomaly:
+  default_method: zscore
+  zscore_threshold: 3.0
+  mean_ratio_threshold: 3.0
+
+paths:
+  orders: data/incoming/orders.csv
+  customers: data/incoming/customers.csv
+  kb: data/incoming/kb_documents.jsonl
+  history: data/history/metrics_history.csv

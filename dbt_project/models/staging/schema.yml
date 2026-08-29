@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: Cleaned order records used by downstream marts.
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+      - name: currency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['USD', 'VND']
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['pending', 'completed', 'refunded', 'cancelled']
+
+  - name: stg_customers
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null

@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: fct_daily_revenue
+    description: Daily completed-order revenue for the CEO dashboard.
+    columns:
+      - name: order_date
+        data_tests:
+          - not_null
+      - name: daily_revenue
+        data_tests:
+          - not_null

@@ -1,0 +1,39 @@
+dataset: orders
+owner: commerce-data
+freshness:
+  column: updated_at
+  max_delay_minutes: 30
+  severity: warning
+columns:
+  order_id:
+    type: integer
+    required: true
+    unique: true
+    severity: critical
+  customer_id:
+    type: string
+    required: true
+    severity: critical
+  amount:
+    type: number
+    required: true
+    min: 0
+    severity: critical
+  currency:
+    type: string
+    required: true
+    accepted_values: [USD, VND]
+    severity: critical
+  status:
+    type: string
+    required: true
+    accepted_values: [pending, completed, refunded, cancelled]
+    severity: warning
+  created_at:
+    type: datetime
+    required: true
+    severity: critical
+  updated_at:
+    type: datetime
+    required: true
+    severity: critical

@@ -1,0 +1,7 @@
+data_reliability_lab:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: warehouse/lab.duckdb
+      threads: 4
