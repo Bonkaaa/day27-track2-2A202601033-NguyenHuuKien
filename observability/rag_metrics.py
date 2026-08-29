@@ -35,6 +35,8 @@ def detect_embedding_norm_shift(
     """Detect drift in embedding norms / similarity space."""
     cur = np.asarray(list(current_norms), dtype=float)
     base = np.asarray(list(baseline_norms), dtype=float)
+    cur = cur[np.isfinite(cur)]
+    base = base[np.isfinite(base)]
     if cur.size == 0 or base.size == 0:
         return {"is_anomaly": False, "score": 0.0, "method": "embedding_norm_zscore", "reason": "empty_input"}
 

@@ -13,9 +13,11 @@ The implementation covers common deterministic checks:
 from __future__ import annotations
 
 from datetime import datetime
+import numbers
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -56,15 +58,23 @@ def _validate_column_type(series: pd.Series, expected_type: str) -> tuple[bool, 
     expected_type = expected_type.lower()
 
     if expected_type in ("integer", "int"):
-        numeric = pd.to_numeric(non_null, errors="coerce")
-        # Hợp lệ nếu là số và là số nguyên (không có phần thập phân)
-        valid_mask = numeric.notna() & (numeric % 1 == 0)
+        valid_mask = non_null.map(
+            lambda value: isinstance(value, numbers.Integral)
+            or (
+                isinstance(value, numbers.Real)
+                and not isinstance(value, (bool, np.bool_))
+                and float(value).is_integer()
+            )
+        )
         invalid_count = int((~valid_mask).sum())
         return invalid_count == 0, invalid_count
 
     elif expected_type in ("number", "float", "numeric"):
-        numeric = pd.to_numeric(non_null, errors="coerce")
-        invalid_count = int(numeric.isna().sum())
+        valid_mask = non_null.map(
+            lambda value: isinstance(value, numbers.Real)
+            and not isinstance(value, (bool, np.bool_))
+        )
+        invalid_count = int((~valid_mask).sum())
         return invalid_count == 0, invalid_count
 
     elif expected_type in ("string", "str", "text"):
@@ -79,7 +89,7 @@ def _validate_column_type(series: pd.Series, expected_type: str) -> tuple[bool, 
         return invalid_count == 0, invalid_count
 
     elif expected_type in ("boolean", "bool"):
-        valid_mask = non_null.map(lambda x: isinstance(x, (bool, int)) and x in (True, False, 0, 1))
+        valid_mask = non_null.map(lambda x: isinstance(x, (bool, np.bool_)))
         invalid_count = int((~valid_mask).sum())
         return invalid_count == 0, invalid_count
 
@@ -173,12 +183,12 @@ def validate_dataframe(
         # 6. Kiểm tra Numeric Range (Min / Max)
         if "min" in rules or "max" in rules:
             numeric = pd.to_numeric(series, errors="coerce")
-            invalid = pd.Series(False, index=series.index)
+            invalid = series.notna() & numeric.isna()
             if "min" in rules:
-                invalid |= numeric < rules["min"]
+                invalid |= numeric.notna() & (numeric < rules["min"])
             if "max" in rules:
-                invalid |= numeric > rules["max"]
-            invalid_count = int(invalid.fillna(False).sum())
+                invalid |= numeric.notna() & (numeric > rules["max"])
+            invalid_count = int(invalid.sum())
             issues.append(
                 _issue(
                     "range",
@@ -196,7 +206,17 @@ def validate_dataframe(
         max_delay = freshness_cfg.get("max_delay_minutes", 60)
         sev = freshness_cfg.get("severity", "warning")
 
-        if col and col in df.columns:
+        if not col or col not in df.columns:
+            issues.append(
+                _issue(
+                    "freshness",
+                    column=col,
+                    severity=sev,
+                    passed=False,
+                    details=f"Missing freshness column: {col}",
+                )
+            )
+        else:
             ts_series = pd.to_datetime(df[col], utc=True, errors="coerce").dropna()
             if ts_series.empty:
                 issues.append(
@@ -210,7 +230,15 @@ def validate_dataframe(
                 )
             else:
                 latest_ts = ts_series.max()
-                now_ts = pd.Timestamp(reference_time) if reference_time else pd.Timestamp.now(tz="UTC")
+                now_ts = (
+                    pd.Timestamp(reference_time)
+                    if reference_time is not None
+                    else pd.Timestamp.now(tz="UTC")
+                )
+                if now_ts.tzinfo is None:
+                    now_ts = now_ts.tz_localize("UTC")
+                else:
+                    now_ts = now_ts.tz_convert("UTC")
                 delay_minutes = (now_ts - latest_ts).total_seconds() / 60.0
                 passed = delay_minutes <= max_delay
                 issues.append(

@@ -16,6 +16,8 @@ def detect_distribution_shift(
     """Detect distribution shifts using both Kolmogorov-Smirnov test and mean ratio."""
     cur = np.asarray(list(current_values), dtype=float)
     base = np.asarray(list(baseline_values), dtype=float)
+    cur = cur[np.isfinite(cur)]
+    base = base[np.isfinite(base)]
     if cur.size == 0 or base.size == 0:
         return {"is_anomaly": False, "score": 0.0, "method": "distribution_shift", "reason": "empty_input"}
 
@@ -26,7 +28,11 @@ def detect_distribution_shift(
     if base_mean == 0:
         mean_score = float("inf") if cur_mean != 0 else 1.0
     else:
-        mean_score = max(abs(cur_mean / base_mean), abs(base_mean / cur_mean)) if cur_mean != 0 else float("inf")
+        mean_score = (
+            max(abs(cur_mean / base_mean), abs(base_mean / cur_mean))
+            if cur_mean != 0
+            else float("inf")
+        )
 
     # 2. 2-Sample Kolmogorov-Smirnov Test
     ks_res = stats.ks_2samp(cur, base)
