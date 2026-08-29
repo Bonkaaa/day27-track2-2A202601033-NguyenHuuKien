@@ -29,17 +29,24 @@ def zscore_detector(current: float, history: Iterable[float], threshold: float =
 
 
 def mad_detector(current: float, history: Iterable[float], threshold: float = 3.5) -> dict[str, Any]:
-    """Robust example, intentionally incomplete around zero-MAD edge cases.
-
-    Students may improve this function and/or use it from auto mode.
-    """
     values = np.asarray(list(history), dtype=float)
     if values.size < 5:
         return {"is_anomaly": False, "score": 0.0, "method": "mad", "reason": "insufficient_history"}
     median = float(np.median(values))
     mad = float(np.median(np.abs(values - median)))
+    
     if mad == 0:
-        return {"is_anomaly": False, "score": 0.0, "method": "mad", "reason": "mad_is_zero_todo"}
+        # Nếu mad = 0, kiểm tra xem current có bằng median không
+        diff = abs(float(current) - median)
+        is_anom = diff > 0
+        score = float("inf") if is_anom else 0.0
+        return {
+            "is_anomaly": is_anom,
+            "score": score,
+            "method": "mad",
+            "reason": f"median={median:.3f}, mad=0 (zero variance), diff={diff:.3f}",
+        }
+    
     modified_z = 0.6745 * abs(float(current) - median) / mad
     return {
         "is_anomaly": bool(modified_z > threshold),
@@ -47,6 +54,7 @@ def mad_detector(current: float, history: Iterable[float], threshold: float = 3.
         "method": "mad",
         "reason": f"median={median:.3f}, mad={mad:.3f}, threshold={threshold}",
     }
+
 
 
 def detect_anomaly(
@@ -70,11 +78,26 @@ def detect_anomaly(
     """
     if method == "mad":
         return mad_detector(current, history)
-    if method in {"zscore", "auto"}:
-        result = zscore_detector(current, history, threshold=threshold)
-        if method == "auto":
-            result["method"] = "auto:zscore"
-            if context:
-                result["reason"] += "; context_ignored_by_starter=true"
-        return result
+        
+    if method == "auto":
+        # Sử dụng segment history từ context nếu có
+        effective_history = history
+        if context and "same_segment_history" in context:
+            effective_history = context["same_segment_history"]
+
+        vals = list(effective_history)
+        if len(vals) >= 5:
+            res = mad_detector(current, vals, threshold=3.5)
+            res["method"] = "auto:mad"
+            return res
+        else:
+            res = zscore_detector(current, vals, threshold=threshold)
+            res["method"] = "auto:zscore"
+            return res
+
+    if method == "zscore":
+        return zscore_detector(current, history, threshold=threshold)
+        
     raise ValueError(f"Unsupported method: {method}")
+
+

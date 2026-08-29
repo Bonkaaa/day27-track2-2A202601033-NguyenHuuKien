@@ -1,15 +1,18 @@
 """Simple contract validator used as the starter baseline.
 
-The implementation intentionally covers only common deterministic checks.
-Students are expected to extend it with:
-- stronger type validation/coercion rules,
-- freshness checks,
-- cross-field/cross-table assertions,
-- severity-aware actions (block/quarantine/warn),
-- richer observability metadata.
+The implementation covers common deterministic checks:
+- column presence (required_column)
+- not-null constraints (not_null)
+- data type validation (type)
+- unique constraints (unique)
+- accepted values (accepted_values)
+- numeric range constraints (range)
+- contract freshness checks (freshness)
+- severity-aware action decisions (block/warn/pass)
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +42,54 @@ def load_contract(path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[str, Any]]:
+def _validate_column_type(series: pd.Series, expected_type: str) -> tuple[bool, int]:
+    """Kiểm tra kiểu dữ liệu cho các giá trị non-null trong series.
+    
+    Trả về: (passed, invalid_count)
+    """
+    non_null = series.dropna()
+    if non_null.empty:
+        return True, 0
+
+    expected_type = expected_type.lower()
+
+    if expected_type in ("integer", "int"):
+        numeric = pd.to_numeric(non_null, errors="coerce")
+        # Hợp lệ nếu là số và là số nguyên (không có phần thập phân)
+        valid_mask = numeric.notna() & (numeric % 1 == 0)
+        invalid_count = int((~valid_mask).sum())
+        return invalid_count == 0, invalid_count
+
+    elif expected_type in ("number", "float", "numeric"):
+        numeric = pd.to_numeric(non_null, errors="coerce")
+        invalid_count = int(numeric.isna().sum())
+        return invalid_count == 0, invalid_count
+
+    elif expected_type in ("string", "str", "text"):
+        # Trong pandas, chuỗi có thể là kiểu object hoặc string
+        valid_mask = non_null.map(lambda x: isinstance(x, str))
+        invalid_count = int((~valid_mask).sum())
+        return invalid_count == 0, invalid_count
+
+    elif expected_type in ("datetime", "timestamp", "date"):
+        dt = pd.to_datetime(non_null, errors="coerce", utc=True)
+        invalid_count = int(dt.isna().sum())
+        return invalid_count == 0, invalid_count
+
+    elif expected_type in ("boolean", "bool"):
+        valid_mask = non_null.map(lambda x: isinstance(x, (bool, int)) and x in (True, False, 0, 1))
+        invalid_count = int((~valid_mask).sum())
+        return invalid_count == 0, invalid_count
+
+    return True, 0
+
+
+def validate_dataframe(
+    df: pd.DataFrame,
+    contract: dict[str, Any],
+    reference_time: datetime | pd.Timestamp | None = None,
+) -> list[dict[str, Any]]:
+    """Kiểm tra DataFrame dựa trên các quy tắc định nghĩa trong contract."""
     issues: list[dict[str, Any]] = []
     columns = contract.get("columns", {})
 
@@ -47,6 +97,7 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
         severity = rules.get("severity", "warning")
         required = bool(rules.get("required", False))
 
+        # 1. Kiểm tra cột bắt buộc có tồn tại không
         if column not in df.columns:
             if required:
                 issues.append(
@@ -62,6 +113,7 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
 
         series = df[column]
 
+        # 2. Kiểm tra Not Null
         if required:
             null_count = int(series.isna().sum())
             issues.append(
@@ -74,6 +126,21 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
+        # 3. Kiểm tra Data Type
+        expected_type = rules.get("type")
+        if expected_type:
+            type_passed, invalid_count = _validate_column_type(series, expected_type)
+            issues.append(
+                _issue(
+                    "type",
+                    column=column,
+                    severity=severity,
+                    passed=type_passed,
+                    details=f"expected_type={expected_type}, invalid_type_count={invalid_count}",
+                )
+            )
+
+        # 4. Kiểm tra Unique
         if rules.get("unique"):
             duplicate_count = int(series.duplicated(keep=False).sum())
             issues.append(
@@ -86,6 +153,7 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
+        # 5. Kiểm tra Accepted Values
         accepted = rules.get("accepted_values")
         if accepted is not None:
             invalid_mask = series.notna() & ~series.isin(accepted)
@@ -100,7 +168,7 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
-        # Starter numeric range support. Type validation is intentionally minimal.
+        # 6. Kiểm tra Numeric Range (Min / Max)
         if "min" in rules or "max" in rules:
             numeric = pd.to_numeric(series, errors="coerce")
             invalid = pd.Series(False, index=series.index)
@@ -119,9 +187,39 @@ def validate_dataframe(df: pd.DataFrame, contract: dict[str, Any]) -> list[dict[
                 )
             )
 
-    # TODO(student): validate contract-level freshness using contract['freshness'].
-    # TODO(student): validate declared data types. pd.to_numeric(..., errors='coerce')
-    #                can silently hide string/type drift if you do not check it explicitly.
+    # 7. Kiểm tra Contract Freshness
+    freshness_cfg = contract.get("freshness")
+    if freshness_cfg and isinstance(freshness_cfg, dict):
+        col = freshness_cfg.get("column")
+        max_delay = freshness_cfg.get("max_delay_minutes", 60)
+        sev = freshness_cfg.get("severity", "warning")
+
+        if col and col in df.columns:
+            ts_series = pd.to_datetime(df[col], utc=True, errors="coerce").dropna()
+            if ts_series.empty:
+                issues.append(
+                    _issue(
+                        "freshness",
+                        column=col,
+                        severity=sev,
+                        passed=False,
+                        details=f"Column {col} has no valid datetime values",
+                    )
+                )
+            else:
+                latest_ts = ts_series.max()
+                now_ts = pd.Timestamp(reference_time) if reference_time else pd.Timestamp.now(tz="UTC")
+                delay_minutes = (now_ts - latest_ts).total_seconds() / 60.0
+                passed = delay_minutes <= max_delay
+                issues.append(
+                    _issue(
+                        "freshness",
+                        column=col,
+                        severity=sev,
+                        passed=passed,
+                        details=f"delay_minutes={delay_minutes:.1f}, max_delay={max_delay}",
+                    )
+                )
 
     return issues
 
@@ -131,5 +229,22 @@ def failed_issues(issues: list[dict[str, Any]], min_severity: str | None = None)
     if min_severity is None:
         return failed
     order = {"info": 0, "warning": 1, "critical": 2}
-    threshold = order[min_severity]
+    threshold = order.get(min_severity, 1)
     return [i for i in failed if order.get(i.get("severity", "warning"), 1) >= threshold]
+
+
+def determine_action(issues: list[dict[str, Any]]) -> str:
+    """Xác định hành động của pipeline dựa trên mức độ lỗi:
+    - 'block': khi có lỗi critical
+    - 'warn': khi chỉ có lỗi warning
+    - 'pass': khi không có lỗi hoặc chỉ có info
+    """
+    failed = [i for i in issues if not i.get("passed", False)]
+    if not failed:
+        return "pass"
+    severities = {i.get("severity", "warning") for i in failed}
+    if "critical" in severities:
+        return "block"
+    if "warning" in severities:
+        return "warn"
+    return "pass"

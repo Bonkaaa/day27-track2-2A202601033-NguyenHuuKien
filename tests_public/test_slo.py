@@ -14,3 +14,19 @@ def test_zero_events_is_safe():
     result = slo_status(0.99, bad_events=0, total_events=0)
     assert result["burn_rate"] == 0
     assert result["breached"] is False
+
+from student_api import multiwindow_burn
+
+
+def test_transient_spike_does_not_page():
+    # Short window cháy rất cao (15.0) nhưng long window vẫn thấp (0.5)
+    decision = multiwindow_burn(short_window_burn=15.0, long_window_burn=0.5)
+    assert decision["page"] is False
+
+
+def test_sustained_fast_burn_triggers_paging():
+    # Cả 2 window đều cháy rất cao
+    decision = multiwindow_burn(short_window_burn=15.0, long_window_burn=8.0)
+    assert decision["page"] is True
+    assert decision["severity"] == "critical"
+
